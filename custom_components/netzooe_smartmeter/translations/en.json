@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Netz OÖ Smart Meter",
+        "description": "Enter your Netz OÖ eService credentials.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot connect",
+      "invalid_auth": "Invalid username or password",
+      "unknown": "Unknown error"
+    },
+    "abort": {
+      "already_configured": "This account is already configured."
+    }
+  }
+}
