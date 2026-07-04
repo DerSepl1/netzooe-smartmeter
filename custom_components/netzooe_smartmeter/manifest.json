@@ -1,0 +1,18 @@
+{
+  "domain": "netzooe_smartmeter",
+  "name": "Netz OÖ Smart Meter",
+  "version": "0.0.1",
+  "documentation": "https://github.com/DerSepl1/netzooe-smartmeter",
+  "issue_tracker": "https://github.com/DerSepl1/netzooe-smartmeter/issues",
+  "codeowners": [
+    "@DerSepl1"
+  ],
+  "config_flow": true,
+  "iot_class": "cloud_polling",
+  "integration_type": "hub",
+  "requirements": [],
+  "dependencies": [],
+  "loggers": [
+    "custom_components.netzooe_smartmeter"
+  ]
+}
