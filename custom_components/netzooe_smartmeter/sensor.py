@@ -4,16 +4,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 
-async def async_setup_entry(
-    hass,
-    entry,
-    async_add_entities,
-):
+async def async_setup_entry(hass, entry, async_add_entities):
+
     coordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(
         [
-            NetzOOELastValueSensor(coordinator),
+            NetzOOELastQuarterSensor(coordinator),
             NetzOOELastTimestampSensor(coordinator),
         ]
     )
@@ -25,19 +22,21 @@ class NetzOOEBaseSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
 
 
-class NetzOOELastValueSensor(NetzOOEBaseSensor):
+class NetzOOELastQuarterSensor(NetzOOEBaseSensor):
 
-    _attr_name = "Netz OÖ Letzter Verbrauch"
-    _attr_unique_id = "netzooe_last_value"
+    _attr_name = "Netz OÖ Letzter 15-Minuten Verbrauch"
+    _attr_unique_id = "netzooe_last_quarter"
     _attr_native_unit_of_measurement = "kWh"
 
     @property
     def native_value(self):
 
-        values = self.coordinator.data.get(
-            "profileValues",
-            [],
-        )
+        if not self.coordinator.data:
+            return None
+
+        profile = self.coordinator.data[0]
+
+        values = profile["profileValues"]
 
         if not values:
             return None
@@ -53,10 +52,12 @@ class NetzOOELastTimestampSensor(NetzOOEBaseSensor):
     @property
     def native_value(self):
 
-        values = self.coordinator.data.get(
-            "profileValues",
-            [],
-        )
+        if not self.coordinator.data:
+            return None
+
+        profile = self.coordinator.data[0]
+
+        values = profile["profileValues"]
 
         if not values:
             return None
