@@ -13,38 +13,12 @@ class NetzOOeAPI:
         self.session = session
         self.xsrf_token = ""
 
-    async def _fetch_csrf_token(self, phase=""):
-        """Holt das Token zwingend über den API-Endpunkt, da Cookies hier nicht ausreichen."""
-        url = f"{BASE_URL}/service/v1.0/session/csrf"
-        headers = {
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json, text/plain, */*",
-            "Origin": BASE_URL,
-            "Referer": f"{BASE_URL}/app/login",
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        if self.xsrf_token:
-            headers["X-XSRF-TOKEN"] = self.xsrf_token
-
-        try:
-            async with self.session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if "token" in data:
-                        self.xsrf_token = data["token"]
-                        _LOGGER.warning(f"=== [{phase}] CSRF-Token via API erhalten: {self.xsrf_token[:5]}... ===")
-                        return
-        except Exception as e:
-            _LOGGER.error(f"Fehler beim Token-Abruf: {e}")
-
-        # Fallback auf Cookies, falls die API zickt
+    def _extract_token_from_cookies(self):
         for cookie in self.session.cookie_jar:
             if cookie.key == "XSRF-TOKEN":
                 self.xsrf_token = unquote(cookie.value)
-                _LOGGER.warning(f"=== [{phase}] CSRF-Token via Cookie erhalten: {self.xsrf_token[:5]}... ===")
-                return
-                
-        _LOGGER.error(f"=== [{phase}] FEHLER: Konnte absolut kein CSRF-Token erhalten! ===")
+                return True
+        return False
 
     def _get_headers(self, is_json=True):
         headers = {
@@ -61,60 +35,84 @@ class NetzOOeAPI:
             
         if self.xsrf_token:
             headers["X-XSRF-TOKEN"] = self.xsrf_token
-            
         return headers
 
     async def login(self):
-        _LOGGER.warning("=== START LÖSUNG V5 ===")
+        _LOGGER.warning("=== START LÖSUNG V6 (Der HAR-Pfad) ===")
         
-        # 1. Startseite abrufen (JSESSIONID generieren lassen)
-        async with self.session.get(f"{BASE_URL}/app/login", headers={"User-Agent": USER_AGENT}) as resp:
-            await resp.read()
+        # 1. Die von dir bewährte Methode: GET /session um das allererste Token zu holen!
+        _LOGGER.warning("=== 1. GET /service/v1.0/session (Pre-Login) ===")
+        session_url = f"{BASE_URL}/service/v1.0/session"
+        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp1:
+            await resp1.read()
+            _LOGGER.warning(f"Status: {resp1.status}")
         
-        # 2. WICHTIG: Token noch VOR dem Login generieren lassen
-        await self._fetch_csrf_token(phase="PRE-LOGIN")
+        self._extract_token_from_cookies()
+        
+        # Falls das nicht reicht (laut deiner HAR-Datei), rufen wir noch Refresh auf
+        if not self.xsrf_token:
+            _LOGGER.warning("=== 1b. POST /service/j_security_check/refresh ===")
+            refresh_url = f"{BASE_URL}/service/j_security_check/refresh"
+            async with self.session.post(refresh_url, headers=self._get_headers(is_json=True)) as rr:
+                await rr.read()
+            self._extract_token_from_cookies()
 
         if not self.xsrf_token:
-            _LOGGER.error("=== ABBRUCH: Ohne initiales Token wird der Login zu 100% scheitern! ===")
+            _LOGGER.error("=== HILFE: Immer noch kein initiales Token. Login wird scheitern! ===")
             return False
 
-        # 3. Login ausführen
+        # 2. Login ausführen
+        _LOGGER.warning("=== 2. POST /service/j_security_check ===")
         login_url = f"{BASE_URL}/service/j_security_check"
         payload = {
             "j_username": self.username,
             "j_password": self.password
         }
         
-        _LOGGER.warning("=== Sende Login-Daten inkl. Token ===")
-        async with self.session.post(login_url, data=payload, headers=self._get_headers(is_json=False), allow_redirects=False) as response:
-            _LOGGER.warning(f"=== Login HTTP Status: {response.status} ===")
-            if response.status == 302:
-                loc = response.headers.get("Location", "")
-                _LOGGER.warning(f"=== Login leitet weiter nach: {loc} ===")
-                if "error" in loc:
-                    _LOGGER.error("=== FEHLER: Login abgewiesen (Passwort falsch?) ===")
-                    return False
-        
-        # 4. Token NACH dem Login zwingend erneuern (Spring Security rotiert das Token hier!)
-        await self._fetch_csrf_token(phase="POST-LOGIN")
+        async with self.session.post(login_url, data=payload, headers=self._get_headers(is_json=False), allow_redirects=False) as resp2:
+            _LOGGER.warning(f"Status: {resp2.status}")
+            loc = resp2.headers.get("Location", "")
+            if resp2.status in (302, 303) and "error" in loc:
+                _LOGGER.error("=== Login abgewiesen (Passwort falsch?) ===")
+                return False
 
-        # 5. Benutzer-Session im Backend aktivieren
-        session_url = f"{BASE_URL}/service/v1.0/session"
-        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp:
-            _LOGGER.warning(f"=== Session Aktivierung HTTP Status: {resp.status} ===")
+        # 3. NACH dem Login: Post-Login Token Refresh (Das hat dir am Anfang für die Zähler gefehlt!)
+        _LOGGER.warning("=== 3. POST /service/j_security_check/refresh ===")
+        refresh_url = f"{BASE_URL}/service/j_security_check/refresh"
+        async with self.session.post(refresh_url, headers=self._get_headers(is_json=True)) as resp3:
+            await resp3.read()
+
+        _LOGGER.warning("=== 4. GET /service/v1.0/session (Post-Login Backend-Aktivierung) ===")
+        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp4:
+            await resp4.read()
+
+        _LOGGER.warning("=== 5. GET /service/v1.0/session/csrf (Hole frisches Token für Zählerabruf) ===")
+        csrf_url = f"{BASE_URL}/service/v1.0/session/csrf"
+        async with self.session.get(csrf_url, headers=self._get_headers(is_json=True)) as resp5:
+            if resp5.status == 200:
+                data = await resp5.json()
+                if "token" in data:
+                    self.xsrf_token = data["token"]
+                    _LOGGER.warning(f"=== NEUES TOKEN ERHALTEN: {self.xsrf_token[:5]}... ===")
+
+        self._extract_token_from_cookies()
+        
+        if not self.xsrf_token:
+            _LOGGER.error("=== Login abgeschlossen, aber das CSRF-Token für den Zählerabruf fehlt! ===")
+            return False
 
         return True
 
     async def get_profiles(self):
-        url = f"{BASE_URL}/service/v1.0/consumptions/profiles"
+        url = f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
         async with self.session.get(url, headers=self._get_headers(is_json=True)) as response:
             if response.status == 200:
-                _LOGGER.warning("=== Profile erfolgreich geladen! ===")
+                _LOGGER.warning("=== ZÄHLERPROFILE ERFOLGREICH GELADEN! ===")
                 return await response.json()
-            
-            text = await response.text()
-            _LOGGER.error(f"=== ENDGÜLTIGER FEHLER PROFILABRUF: {response.status} - Antwort: {text} ===")
-            return None
+            else:
+                text = await response.text()
+                _LOGGER.error(f"=== FEHLER PROFILABRUF: {response.status} - Antwort: {text} ===")
+                return None
 
     async def get_15min_readings(self, contract_account, meter_point, date_str):
         url = f"{BASE_URL}/service/v1.0/consumptions/profile/active"
@@ -131,6 +129,6 @@ class NetzOOeAPI:
         
         async with self.session.post(url, json=payload, headers=self._get_headers(is_json=True)) as response:
             if response.status == 200:
-                _LOGGER.warning("=== 15-Minuten-Werte erfolgreich geladen! ===")
+                _LOGGER.warning("=== 15-MINUTEN WERTE ERFOLGREICH GELADEN! ===")
                 return await response.json()
             return None
