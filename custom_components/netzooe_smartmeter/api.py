@@ -11,26 +11,39 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class NetzOOEApi:
-    """Netz OÖ API."""
+    """API Client für Netz OÖ."""
 
     def __init__(self, username: str, password: str):
         self._username = username
         self._password = password
 
         self._session: aiohttp.ClientSession | None = None
+        self._logged_in = False
 
         self.contract_account = None
         self.meter_point = None
+        self.profile = None
 
     async def connect(self):
+        """Create HTTP session."""
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            timeout = aiohttp.ClientTimeout(total=30)
+
+            self._session = aiohttp.ClientSession(
+                timeout=timeout
+            )
 
     async def close(self):
+        """Close HTTP session."""
         if self._session:
             await self._session.close()
+            self._session = None
 
     async def login(self):
+        """Login to Netz OÖ."""
+
+        if self._logged_in:
+            return
 
         await self.connect()
 
@@ -50,9 +63,14 @@ class NetzOOEApi:
 
         response.raise_for_status()
 
-        return True
+        self._logged_in = True
+
+        _LOGGER.info("Login erfolgreich")
 
     async def load_meter(self):
+        """Load first available meter."""
+
+        await self.login()
 
         response = await self._session.get(
             f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
@@ -62,22 +80,29 @@ class NetzOOEApi:
 
         data = await response.json()
 
-        if not data:
+        if len(data) == 0:
             raise RuntimeError("Kein Zählpunkt gefunden.")
 
-        meter = data[0]
+        self.profile = data[0]
 
-        self.contract_account = meter["contractAccountNumber"]
-        self.meter_point = meter["meterPointAdministrationNumber"]
+        self.contract_account = self.profile["contractAccountNumber"]
+
+        self.meter_point = self.profile[
+            "meterPointAdministrationNumber"
+        ]
 
         _LOGGER.info(
             "Gefundener Zählpunkt %s",
             self.meter_point,
         )
 
-        return meter
-
     async def quarter_values(self):
+        """Load quarter values."""
+
+        await self.login()
+
+        if self.contract_account is None:
+            await self.load_meter()
 
         today = date.today()
 
@@ -106,21 +131,15 @@ class NetzOOEApi:
 
         response.raise_for_status()
 
-        return await response.json()
-
-    async def async_update(self):
-
-        await self.login()
-
-        if self.contract_account is None:
-            await self.load_meter()
-
-        data = await self.quarter_values()
+        data = await response.json()
 
         if isinstance(data, list):
-
             if len(data):
-
                 return data[0]
 
         return data
+
+    async def async_update(self):
+        """Update all data."""
+
+        return await self.quarter_values()
