@@ -112,6 +112,15 @@ class NetzOOEApi:
 
         await self.login()
 
-        await self.load_meter()
+        if self.contract_account is None:
+            await self.load_meter()
 
-        return await self.quarter_values()
+        data = await self.quarter_values()
+
+        if isinstance(data, list):
+
+            if len(data):
+
+                return data[0]
+
+        return data
