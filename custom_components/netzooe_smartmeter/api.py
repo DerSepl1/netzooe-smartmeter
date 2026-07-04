@@ -19,6 +19,7 @@ class NetzOOEApi:
 
         self._session: aiohttp.ClientSession | None = None
         self._logged_in = False
+        self._xsrf_token = None
 
         self.contract_account = None
         self.meter_point = None
@@ -28,10 +29,7 @@ class NetzOOEApi:
         """Create HTTP session."""
         if self._session is None:
             timeout = aiohttp.ClientTimeout(total=30)
-
-            self._session = aiohttp.ClientSession(
-                timeout=timeout
-            )
+            self._session = aiohttp.ClientSession(timeout=timeout)
 
     async def close(self):
         """Close HTTP session."""
@@ -39,8 +37,22 @@ class NetzOOEApi:
             await self._session.close()
             self._session = None
 
+    async def load_csrf(self):
+        """Read XSRF token from cookie."""
+
+        await self._session.get(
+            f"{BASE_URL}/service/v1.0/session/csrf"
+        )
+
+        cookies = self._session.cookie_jar.filter_cookies(BASE_URL)
+
+        token = cookies.get("XSRF-TOKEN")
+
+        if token:
+            self._xsrf_token = token.value
+
     async def login(self):
-        """Login to Netz OÖ."""
+        """Login."""
 
         if self._logged_in:
             return
@@ -63,17 +75,26 @@ class NetzOOEApi:
 
         response.raise_for_status()
 
+        await self._session.get(
+            f"{BASE_URL}/service/v1.0/session"
+        )
+
+        await self.load_csrf()
+
         self._logged_in = True
 
         _LOGGER.info("Login erfolgreich")
 
     async def load_meter(self):
-        """Load first available meter."""
+        """Load first meter."""
 
         await self.login()
 
         response = await self._session.get(
-            f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
+            f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true",
+            headers={
+                "X-XSRF-TOKEN": self._xsrf_token,
+            },
         )
 
         response.raise_for_status()
@@ -81,23 +102,20 @@ class NetzOOEApi:
         data = await response.json()
 
         if len(data) == 0:
-            raise RuntimeError("Kein Zählpunkt gefunden.")
+            raise RuntimeError("Kein Zählpunkt gefunden")
 
         self.profile = data[0]
 
-        self.contract_account = self.profile["contractAccountNumber"]
+        self.contract_account = self.profile[
+            "contractAccountNumber"
+        ]
 
         self.meter_point = self.profile[
             "meterPointAdministrationNumber"
         ]
 
-        _LOGGER.info(
-            "Gefundener Zählpunkt %s",
-            self.meter_point,
-        )
-
     async def quarter_values(self):
-        """Load quarter values."""
+        """Load 15 minute values."""
 
         await self.login()
 
@@ -105,7 +123,6 @@ class NetzOOEApi:
             await self.load_meter()
 
         today = date.today()
-
         start = today - timedelta(days=2)
 
         payload = {
@@ -127,6 +144,9 @@ class NetzOOEApi:
         response = await self._session.post(
             f"{BASE_URL}/service/v1.0/consumptions/profile/active",
             json=payload,
+            headers={
+                "X-XSRF-TOKEN": self._xsrf_token,
+            },
         )
 
         response.raise_for_status()
@@ -134,12 +154,12 @@ class NetzOOEApi:
         data = await response.json()
 
         if isinstance(data, list):
-            if len(data):
+            if data:
                 return data[0]
 
         return data
 
     async def async_update(self):
-        """Update all data."""
+        """Update."""
 
         return await self.quarter_values()
