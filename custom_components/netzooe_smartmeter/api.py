@@ -13,12 +13,11 @@ class NetzOOeAPI:
         self.session = session
         self.xsrf_token = ""
 
-    def _extract_token_from_cookies(self):
+    def _update_token_from_cookies(self):
+        """Sucht nach dem aktuellsten Token in der Cookie-Dose."""
         for cookie in self.session.cookie_jar:
             if cookie.key == "XSRF-TOKEN":
                 self.xsrf_token = unquote(cookie.value)
-                return True
-        return False
 
     def _get_headers(self, is_json=True):
         headers = {
@@ -38,69 +37,43 @@ class NetzOOeAPI:
         return headers
 
     async def login(self):
-        _LOGGER.warning("=== START LÖSUNG V6 (Der HAR-Pfad) ===")
+        _LOGGER.warning("=== START LÖSUNG V9 (Der echte Erfolg) ===")
         
-        # 1. Die von dir bewährte Methode: GET /session um das allererste Token zu holen!
-        _LOGGER.warning("=== 1. GET /service/v1.0/session (Pre-Login) ===")
-        session_url = f"{BASE_URL}/service/v1.0/session"
-        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp1:
-            await resp1.read()
-            _LOGGER.warning(f"Status: {resp1.status}")
-        
-        self._extract_token_from_cookies()
-        
-        # Falls das nicht reicht (laut deiner HAR-Datei), rufen wir noch Refresh auf
-        if not self.xsrf_token:
-            _LOGGER.warning("=== 1b. POST /service/j_security_check/refresh ===")
-            refresh_url = f"{BASE_URL}/service/j_security_check/refresh"
-            async with self.session.post(refresh_url, headers=self._get_headers(is_json=True)) as rr:
-                await rr.read()
-            self._extract_token_from_cookies()
+        # 1. Startseite für die initialen Cookies
+        async with self.session.get(f"{BASE_URL}/app/login", headers={"User-Agent": USER_AGENT}) as resp:
+            await resp.read()
+            
+        self._update_token_from_cookies()
 
-        if not self.xsrf_token:
-            _LOGGER.error("=== HILFE: Immer noch kein initiales Token. Login wird scheitern! ===")
-            return False
-
-        # 2. Login ausführen
-        _LOGGER.warning("=== 2. POST /service/j_security_check ===")
+        # 2. Login-Daten senden
         login_url = f"{BASE_URL}/service/j_security_check"
         payload = {
             "j_username": self.username,
             "j_password": self.password
         }
         
-        async with self.session.post(login_url, data=payload, headers=self._get_headers(is_json=False), allow_redirects=False) as resp2:
-            _LOGGER.warning(f"Status: {resp2.status}")
-            loc = resp2.headers.get("Location", "")
-            if resp2.status in (302, 303) and "error" in loc:
-                _LOGGER.error("=== Login abgewiesen (Passwort falsch?) ===")
+        _LOGGER.warning("=== Sende Login-Daten... ===")
+        # Wir lassen Weiterleitungen (allow_redirects=True) einfach zu und werten den Status nicht mehr künstlich als Fehler.
+        async with self.session.post(login_url, data=payload, headers=self._get_headers(is_json=False), allow_redirects=True) as resp:
+            await resp.read()
+            _LOGGER.warning(f"=== Login-Antwort erhalten (Status {resp.status}) ===")
+
+        # WICHTIG: Nach dem Login rotiert der Server das Token! Wir müssen es neu auslesen.
+        self._update_token_from_cookies()
+
+        # 3. VERIFIKATION: Sind wir wirklich drin?
+        _LOGGER.warning("=== Prüfe Session-Status... ===")
+        session_url = f"{BASE_URL}/service/v1.0/session"
+        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp:
+            if resp.status == 200:
+                _LOGGER.warning("=== Login ERFOLGREICH vom Server bestätigt! ===")
+            else:
+                text = await resp.text()
+                _LOGGER.error(f"=== FEHLER: Login fehlgeschlagen! (Passwort falsch?) Status: {resp.status} - Antwort: {text[:100]} ===")
                 return False
 
-        # 3. NACH dem Login: Post-Login Token Refresh (Das hat dir am Anfang für die Zähler gefehlt!)
-        _LOGGER.warning("=== 3. POST /service/j_security_check/refresh ===")
-        refresh_url = f"{BASE_URL}/service/j_security_check/refresh"
-        async with self.session.post(refresh_url, headers=self._get_headers(is_json=True)) as resp3:
-            await resp3.read()
-
-        _LOGGER.warning("=== 4. GET /service/v1.0/session (Post-Login Backend-Aktivierung) ===")
-        async with self.session.get(session_url, headers=self._get_headers(is_json=True)) as resp4:
-            await resp4.read()
-
-        _LOGGER.warning("=== 5. GET /service/v1.0/session/csrf (Hole frisches Token für Zählerabruf) ===")
-        csrf_url = f"{BASE_URL}/service/v1.0/session/csrf"
-        async with self.session.get(csrf_url, headers=self._get_headers(is_json=True)) as resp5:
-            if resp5.status == 200:
-                data = await resp5.json()
-                if "token" in data:
-                    self.xsrf_token = data["token"]
-                    _LOGGER.warning(f"=== NEUES TOKEN ERHALTEN: {self.xsrf_token[:5]}... ===")
-
-        self._extract_token_from_cookies()
-        
-        if not self.xsrf_token:
-            _LOGGER.error("=== Login abgeschlossen, aber das CSRF-Token für den Zählerabruf fehlt! ===")
-            return False
-
+        # Token nochmals auf den aktuellsten Stand bringen für die Zählerabfrage
+        self._update_token_from_cookies()
         return True
 
     async def get_profiles(self):
@@ -111,7 +84,7 @@ class NetzOOeAPI:
                 return await response.json()
             else:
                 text = await response.text()
-                _LOGGER.error(f"=== FEHLER PROFILABRUF: {response.status} - Antwort: {text} ===")
+                _LOGGER.error(f"=== FEHLER PROFILABRUF: {response.status} - {text[:200]} ===")
                 return None
 
     async def get_15min_readings(self, contract_account, meter_point, date_str):
