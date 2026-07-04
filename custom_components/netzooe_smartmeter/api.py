@@ -1,8 +1,12 @@
 import logging
 import aiohttp
+from urllib.parse import unquote
 
 _LOGGER = logging.getLogger(__name__)
 BASE_URL = "https://eservice.netzooe.at"
+
+# WICHTIG: Täuscht einen echten Browser vor, um die Cloudflare-Firewall zu passieren
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 class NetzOOeAPI:
     def __init__(self, username, password, session: aiohttp.ClientSession):
@@ -11,34 +15,29 @@ class NetzOOeAPI:
         self.session = session
         self.xsrf_token = None
 
-    async def _update_csrf_token(self):
-        # 1. Token sicher aus den Cookies lesen (Beste Methode bei Netz OÖ)
+    def _extract_token_from_cookies(self):
+        """Liest das XSRF-Token geräuschlos aus den Cookies aus, um 401-Fehler zu vermeiden."""
         cookies = self.session.cookie_jar.filter_cookies(BASE_URL)
         if "XSRF-TOKEN" in cookies:
-            self.xsrf_token = cookies["XSRF-TOKEN"].value
+            # Cookies sind oft URL-codiert (z.B. %2D statt -). Das muss zwingend decodiert werden!
+            self.xsrf_token = unquote(cookies["XSRF-TOKEN"].value)
 
-        # 2. Token über die API prüfen (Ignoriert 401 vor dem Login lautlos)
+    async def _update_csrf_token_api(self):
+        """Holt das Token über die API (wird nur NACH dem Login verwendet)."""
         url = f"{BASE_URL}/service/v1.0/session/csrf"
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Origin": BASE_URL,
-            "Referer": f"{BASE_URL}/app/login",
-        }
-        if self.xsrf_token:
-            headers["X-XSRF-TOKEN"] = self.xsrf_token
-            
-        async with self.session.get(url, headers=headers) as response:
+        async with self.session.get(url, headers=self._get_headers(is_json=True)) as response:
             if response.status == 200:
                 data = await response.json()
                 self.xsrf_token = data.get("token", self.xsrf_token)
 
     def _get_headers(self, is_json=True):
         headers = {
+            "User-Agent": USER_AGENT,
             "Accept": "application/json, text/plain, */*",
             "Origin": BASE_URL,
             "Referer": f"{BASE_URL}/app/login",
+            "X-Requested-With": "XMLHttpRequest" # Signalisiert dem Server einen modernen Background-Request
         }
-        # Unterscheidung zwischen API-Requests (JSON) und dem Login-Request (Formular)
         if is_json:
             headers["Content-Type"] = "application/json"
         else:
@@ -49,32 +48,36 @@ class NetzOOeAPI:
         return headers
 
     async def login(self):
-        # 1. Login-Seite aufrufen, um Session-Cookies zu generieren
-        await self.session.get(f"{BASE_URL}/app/login")
-        await self._update_csrf_token()
+        _LOGGER.debug("Rufe Login-Seite auf für initiale Session-Cookies...")
+        
+        # 1. Startseite aufrufen (gibt uns unsichtbar die JSESSIONID und das XSRF-TOKEN)
+        await self.session.get(f"{BASE_URL}/app/login", headers={"User-Agent": USER_AGENT})
+        
+        # 2. Token lautlos aus den soeben erhaltenen Cookies extrahieren
+        self._extract_token_from_cookies()
 
-        # 2. Login-Daten senden (WICHTIG: Als Form-Data, nicht als JSON!)
+        # 3. Login Request senden
         login_url = f"{BASE_URL}/service/j_security_check"
         payload = {
             "j_username": self.username,
             "j_password": self.password
         }
         
-        # 'data=payload' anstelle von 'json=payload' macht hier den Unterschied
         async with self.session.post(login_url, data=payload, headers=self._get_headers(is_json=False)) as response:
             if response.status not in (200, 204, 302):
-                _LOGGER.error(f"Login fehlgeschlagen! Status: {response.status}")
+                _LOGGER.error(f"Login fehlgeschlagen. Status: {response.status}")
                 return False
             
-        # 3. Token nach erfolgreichem Login aktualisieren
-        await self._update_csrf_token()
+        # 4. Nach Login das Token aktualisieren (jetzt erlaubt der Server das auch über die API)
+        await self._update_csrf_token_api()
+        self._extract_token_from_cookies()
         return True
 
     async def get_profiles(self):
         url = f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
         async with self.session.get(url, headers=self._get_headers(is_json=True)) as response:
             if response.status == 401:
-                await self._update_csrf_token()
+                await self._update_csrf_token_api()
                 async with self.session.get(url, headers=self._get_headers(is_json=True)) as retry_response:
                     if retry_response.status == 200:
                         return await retry_response.json()
