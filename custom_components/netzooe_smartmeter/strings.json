@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Netz OÖ Smart Meter",
+        "description": "Melde dich mit deinem Netz OÖ eService-Konto an.",
+        "data": {
+          "username": "Benutzername",
+          "password": "Passwort"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen",
+      "invalid_auth": "Benutzername oder Passwort falsch",
+      "unknown": "Unbekannter Fehler"
+    },
+    "abort": {
+      "already_configured": "Integration ist bereits eingerichtet"
+    }
+  }
+}
