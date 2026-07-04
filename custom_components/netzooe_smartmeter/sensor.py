@@ -4,7 +4,6 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    # Sicherer Zugriff: Prüfen, ob __init__.py erfolgreich war
     domain_data = hass.data.get(DOMAIN)
     if not domain_data or entry.entry_id not in domain_data:
         return
@@ -14,7 +13,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class NetzOOeEnergySensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
-    _attr_name = "Netz OÖ Tagesverbrauch"
+    _attr_name = "Tagesverbrauch (15-Min-Summe)"
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -33,8 +32,27 @@ class NetzOOeEnergySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        # Zeigt vorerst 0.0 an, bis wir das fertige JSON berechnen
-        return 0.0
+        data = self.coordinator.data
+        if not data:
+            return None
+        
+        total_kwh = 0.0
+        try:
+            if isinstance(data, list):
+                for pod in data:
+                    values = pod.get("profileValues", pod.get("values", []))
+                    for entry in values:
+                        val = entry.get("value", entry.get("amount", 0.0))
+                        total_kwh += float(val)
+            elif isinstance(data, dict):
+                values = data.get("profileValues", data.get("values", []))
+                for entry in values:
+                    val = entry.get("value", entry.get("amount", 0.0))
+                    total_kwh += float(val)
+        except Exception:
+            pass
+            
+        return round(total_kwh, 3)
         
     @property
     def extra_state_attributes(self):
