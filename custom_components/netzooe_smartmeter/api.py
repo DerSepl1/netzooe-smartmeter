@@ -11,7 +11,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class NetzOOEApi:
-    """API Client für Netz OÖ."""
+    """Netz OÖ API."""
 
     def __init__(self, username: str, password: str):
         self._username = username
@@ -19,8 +19,8 @@ class NetzOOEApi:
 
         self._session: aiohttp.ClientSession | None = None
 
-        self._contract_account = None
-        self._meter_point = None
+        self.contract_account = None
+        self.meter_point = None
 
     async def connect(self):
         if self._session is None:
@@ -29,14 +29,11 @@ class NetzOOEApi:
     async def close(self):
         if self._session:
             await self._session.close()
-            self._session = None
 
-    async def login(self) -> bool:
-        """Login ins Netz OÖ Portal."""
+    async def login(self):
 
         await self.connect()
 
-        # Session initialisieren
         await self._session.get(
             f"{BASE_URL}/service/v1.0/session"
         )
@@ -51,34 +48,47 @@ class NetzOOEApi:
             json=payload,
         )
 
-        if response.status != 200:
-            _LOGGER.error("Login fehlgeschlagen (%s)", response.status)
-            return False
-
-        _LOGGER.info("Login erfolgreich")
+        response.raise_for_status()
 
         return True
 
-    async def set_meter(
-        self,
-        contract_account: str,
-        meter_point: str,
-    ):
-        self._contract_account = contract_account
-        self._meter_point = meter_point
+    async def load_meter(self):
+
+        response = await self._session.get(
+            f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
+        )
+
+        response.raise_for_status()
+
+        data = await response.json()
+
+        if not data:
+            raise RuntimeError("Kein Zählpunkt gefunden.")
+
+        meter = data[0]
+
+        self.contract_account = meter["contractAccountNumber"]
+        self.meter_point = meter["meterPointAdministrationNumber"]
+
+        _LOGGER.info(
+            "Gefundener Zählpunkt %s",
+            self.meter_point,
+        )
+
+        return meter
 
     async def quarter_values(self):
-        """15-Minuten-Werte laden."""
 
         today = date.today()
+
         start = today - timedelta(days=2)
 
         payload = {
             "dimension": "ENERGY",
             "pods": [
                 {
-                    "contractAccountNumber": self._contract_account,
-                    "meterPointAdministrationNumber": self._meter_point,
+                    "contractAccountNumber": self.contract_account,
+                    "meterPointAdministrationNumber": self.meter_point,
                     "type": "ACTIVE_CURRENT",
                     "timerange": {
                         "from": start.isoformat(),
@@ -97,3 +107,11 @@ class NetzOOEApi:
         response.raise_for_status()
 
         return await response.json()
+
+    async def async_update(self):
+
+        await self.login()
+
+        await self.load_meter()
+
+        return await self.quarter_values()
