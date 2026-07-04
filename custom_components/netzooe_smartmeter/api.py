@@ -22,7 +22,7 @@ class NetzOOeAPI:
                 data = await response.json()
                 self.xsrf_token = data.get("token")
             else:
-                _LOGGER.error(f"Fehler beim Abrufen des CSRF-Tokens: {response.status}")
+                _LOGGER.error(f"Fehler CSRF-Token: {response.status}")
 
     def _get_headers(self):
         headers = {
@@ -37,18 +37,14 @@ class NetzOOeAPI:
 
     async def login(self):
         await self._update_csrf_token()
-
         login_url = f"{BASE_URL}/service/j_security_check"
-        payload = {
-            "j_username": self.username,
-            "j_password": self.password
-        }
+        payload = {"j_username": self.username, "j_password": self.password}
         
         async with self.session.post(login_url, json=payload, headers=self._get_headers()) as response:
             if response.status not in (200, 204):
                 return False
             
-        await self._update_csrf_token()
+        await self._update_csrf_token() # WICHTIG: Token nach Login erneuern
         return True
 
     async def get_profiles(self):
@@ -72,10 +68,7 @@ class NetzOOeAPI:
                 "contractAccountNumber": contract_account,
                 "meterPointAdministrationNumber": meter_point,
                 "type": "ACTIVE_CURRENT",
-                "timerange": {
-                    "from": date_str,
-                    "to": date_str
-                },
+                "timerange": {"from": date_str, "to": date_str},
                 "bestAvailableGranularity": "QUARTER_OF_AN_HOUR"
             }]
         }
