@@ -2,7 +2,6 @@ import logging
 from datetime import datetime, timedelta
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-
 from .api import NetzOOeAPI
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,16 +35,11 @@ class NetzOOeDataUpdateCoordinator(DataUpdateCoordinator):
 
             today_str = datetime.now().strftime("%Y-%m-%d")
             
-            readings = await self.api.get_15min_readings(
-                contract_account, 
-                meter_point, 
-                today_str
-            )
+            readings = await self.api.get_15min_readings(contract_account, meter_point, today_str)
 
             if not readings:
                 raise UpdateFailed("Keine Verbrauchsdaten erhalten.")
 
             return readings
-
         except Exception as err:
-            raise UpdateFailed(f"Fehler bei der Kommunikation mit Netz OÖ: {err}")
+            raise UpdateFailed(f"Fehler bei Netz OÖ API: {err}")
