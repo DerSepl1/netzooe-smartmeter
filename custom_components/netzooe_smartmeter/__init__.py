@@ -6,13 +6,15 @@ from .coordinator import NetzOOeDataUpdateCoordinator
 PLATFORMS = ["sensor"]
 
 async def async_setup(hass: HomeAssistant, config: dict):
+    # Erstellt den Speicherplatz sicherheitshalber schon beim HA Start
+    hass.data.setdefault(DOMAIN, {})
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     coordinator = NetzOOeDataUpdateCoordinator(
         hass,
-        entry.data[CONF_USERNAME],
-        entry.data[CONF_PASSWORD],
+        entry.data.get(CONF_USERNAME, ""),
+        entry.data.get(CONF_PASSWORD, ""),
     )
     await coordinator.async_config_entry_first_refresh()
 
