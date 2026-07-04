@@ -125,9 +125,6 @@ class NetzOOEApi:
         response = await self._session.post(
             f"{BASE_URL}/service/v1.0/consumptions/profile/active",
             json=payload,
-            headers={
-                "X-XSRF-TOKEN": self._xsrf_token,
-            },
         )
 
         response.raise_for_status()
