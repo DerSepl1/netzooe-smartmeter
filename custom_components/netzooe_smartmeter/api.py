@@ -12,15 +12,21 @@ class NetzOOeAPI:
         self.xsrf_token = None
 
     async def _update_csrf_token(self):
+        # Versuche zuerst, das Token automatisch aus den Cookies von Home Assistant zu lesen
+        cookies = self.session.cookie_jar.filter_cookies(BASE_URL)
+        if "XSRF-TOKEN" in cookies:
+            self.xsrf_token = cookies["XSRF-TOKEN"].value
+
+        # Hole das Token sicherheitshalber auch noch über die API ab
         url = f"{BASE_URL}/service/v1.0/session/csrf"
-        headers = {}
-        if self.xsrf_token:
-            headers["X-XSRF-TOKEN"] = self.xsrf_token
-            
+        headers = self._get_headers()
+        
         async with self.session.get(url, headers=headers) as response:
             if response.status == 200:
                 data = await response.json()
                 self.xsrf_token = data.get("token")
+            elif response.status == 401:
+                _LOGGER.warning("Token-Endpoint gab 401 zurück, nutze Cookie-Token.")
             else:
                 _LOGGER.error(f"Fehler CSRF-Token: {response.status}")
 
@@ -36,15 +42,23 @@ class NetzOOeAPI:
         return headers
 
     async def login(self):
+        # 1. WICHTIG: Zuerst die Login-Seite "besuchen", um die Session-Cookies zu erhalten!
+        await self.session.get(f"{BASE_URL}/app/login")
+        
+        # 2. Jetzt das Token abrufen (funktioniert nun, da wir eine Session haben)
         await self._update_csrf_token()
+
+        # 3. Login Request senden
         login_url = f"{BASE_URL}/service/j_security_check"
         payload = {"j_username": self.username, "j_password": self.password}
         
         async with self.session.post(login_url, json=payload, headers=self._get_headers()) as response:
             if response.status not in (200, 204):
+                _LOGGER.error(f"Login fehlgeschlagen. HTTP Status: {response.status}")
                 return False
             
-        await self._update_csrf_token() # WICHTIG: Token nach Login erneuern
+        # 4. Nach dem erfolgreichen Login das Token zwingend noch einmal erneuern
+        await self._update_csrf_token()
         return True
 
     async def get_profiles(self):
