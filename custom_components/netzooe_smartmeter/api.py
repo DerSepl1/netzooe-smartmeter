@@ -37,20 +37,6 @@ class NetzOOEApi:
             await self._session.close()
             self._session = None
 
-    async def load_csrf(self):
-        """Read XSRF token from cookie."""
-
-        await self._session.get(
-            f"{BASE_URL}/service/v1.0/session/csrf"
-        )
-
-        cookies = self._session.cookie_jar.filter_cookies(BASE_URL)
-
-        token = cookies.get("XSRF-TOKEN")
-
-        if token:
-            self._xsrf_token = token.value
-
     async def login(self):
         """Login."""
 
@@ -79,8 +65,6 @@ class NetzOOEApi:
             f"{BASE_URL}/service/v1.0/session"
         )
 
-        await self.load_csrf()
-
         self._logged_in = True
 
         _LOGGER.info("Login erfolgreich")
@@ -91,10 +75,7 @@ class NetzOOEApi:
         await self.login()
 
         response = await self._session.get(
-            f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true",
-            headers={
-                "X-XSRF-TOKEN": self._xsrf_token,
-            },
+            f"{BASE_URL}/service/v1.0/consumptions/profiles?branch=STROM&activeOnly=true"
         )
 
         response.raise_for_status()
