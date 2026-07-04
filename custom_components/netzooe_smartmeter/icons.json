@@ -1,0 +1,9 @@
+{
+  "services": {},
+  "entity": {
+    "sensor": {
+      "energy": "mdi:lightning-bolt",
+      "meter": "mdi:counter"
+    }
+  }
+}
