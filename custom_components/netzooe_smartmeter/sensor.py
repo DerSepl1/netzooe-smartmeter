@@ -4,7 +4,12 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 
 async def async_setup_entry(hass, entry, async_add_entities):
-    coordinator = hass.data[DOMAIN][entry.entry_id]
+    # Sicherer Zugriff: Prüfen, ob __init__.py erfolgreich war
+    domain_data = hass.data.get(DOMAIN)
+    if not domain_data or entry.entry_id not in domain_data:
+        return
+    
+    coordinator = domain_data[entry.entry_id]
     async_add_entities([NetzOOeEnergySensor(coordinator)])
 
 class NetzOOeEnergySensor(CoordinatorEntity, SensorEntity):
@@ -28,10 +33,9 @@ class NetzOOeEnergySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        # Zeigt vorerst 0.0 an, bis wir genau wissen, wie wir die JSON der 15-Min-Werte summieren müssen
+        # Zeigt vorerst 0.0 an, bis wir das fertige JSON berechnen
         return 0.0
         
     @property
     def extra_state_attributes(self):
-        # Speichert die gesamte Original-Antwort von Netz OÖ ab, damit du sie im Home Assistant ansehen kannst!
         return {"raw_data": self.coordinator.data}
